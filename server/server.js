@@ -77,6 +77,9 @@ app.get('/download/:fileId', (req, res) => {
 });
 
 app.all(/^\/uploads/, (req, res) => {
+    try {
+        console.log(`[TUS] ${req.method} ${req.originalUrl} offset=${req.headers['upload-offset'] || '-'} user-agent=${req.headers['user-agent'] || '-'} `);
+    } catch (e) { }
     tusServer.handle(req, res);
 });
 
