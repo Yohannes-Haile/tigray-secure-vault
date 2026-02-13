@@ -21,9 +21,19 @@ function App() {
     return new Uppy({ id: 'tigray-vault', debug: true, autoProceed: false })
       .use(Tus, {
         endpoint: '/uploads',
-        retryDelays: [0, 1000, 3000, 5000, 10000],
-        limit: 1,
-        chunkSize: 512 * 1024 // 512KB for stability
+        retryDelays: [0, 1000, 3000, 5000, 10000, 20000], // Long retries for 2G
+        removeFingerprintOnSuccess: true,
+
+        // --- THE RESUME FIX ---
+        // This ensures the ID stays the same even if the browser blinks
+        fingerprint: (file) => {
+          return ['tus', userRef.current, file.name, file.size].join('-');
+        },
+
+        // Tells the server we are specifically looking to resume
+        onBeforeRequest: (req) => {
+          req.setHeader('Tus-Resumable', '1.0.0');
+        }
       });
   }, []);
 

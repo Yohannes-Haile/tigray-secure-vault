@@ -20,7 +20,27 @@ const tusServer = new Server({
 });
 
 app.use(compression());
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PATCH', 'HEAD', 'OPTIONS', 'DELETE'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Tus-Resumable',
+        'Upload-Length',
+        'Upload-Offset',
+        'Upload-Metadata',
+        'X-HTTP-Method-Override'
+    ],
+    exposedHeaders: [
+        'Tus-Resumable',
+        'Upload-Length',
+        'Upload-Offset',
+        'Upload-Metadata',
+        'Location',
+        'Upload-Expires'
+    ]
+}));
 
 // --- SMART FILE LISTING ---
 app.get('/list-files', (req, res) => {
