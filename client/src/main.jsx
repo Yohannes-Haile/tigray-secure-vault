@@ -1,9 +1,16 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App.jsx' // <--- MAKE SURE THIS LINE IS HERE
+import App from './App.jsx'
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)
+// If this line fails, the page stays blank
+const rootElement = document.getElementById('root');
+
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>,
+  )
+} else {
+  console.error("CRITICAL ERROR: Cannot find element with id 'root' in index.html");
+}

@@ -12,6 +12,7 @@
   "dependencies": {
     "@tus/file-store": "^2.0.0",
     "@tus/server": "^2.3.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.6",
     "express": "^5.2.1"
   }
