@@ -39,16 +39,20 @@ function App() {
   }, []);
 
   const fetchFiles = async () => {
-    if (!username) return;
+    if (!username) { setServerFiles([]); return; }
     try {
-      const response = await fetch(`/list-files?user=${username}`);
+      const response = await fetch(`/list-files?user=${encodeURIComponent(username)}`);
       const data = await response.json();
       setServerFiles(data);
-    } catch (e) { }
+    } catch (e) { setServerFiles([]); }
   };
 
   useEffect(() => {
     fetchFiles();
+    // Re-fetch when username changes (e.g. after login)
+  }, [username]);
+
+  useEffect(() => {
     if (dashboardRef.current && !uppy.getPlugin('Dashboard')) {
       uppy.use(Dashboard, { target: dashboardRef.current, inline: true, width: '100%', height: 350 });
     }
