@@ -21,7 +21,6 @@ function App() {
       id: 'tigray-vault',
       debug: true,
       autoProceed: false,
-      // CRITICAL: If the network drops, we only lose 5MB max
       onBeforeFileAdded: (currentFile) => {
         if (currentFile.name.endsWith('.enc')) return true;
         return true;
@@ -30,65 +29,71 @@ function App() {
       .use(Tus, {
         endpoint: '/uploads',
         retryDelays: [0, 1000, 3000, 5000, 10000],
-        chunkSize: 5 * 1024 * 1024, // 5MB chunks
-        // THE FIX: Deterministic Fingerprint
-        // This ensures the ID matches EXACTLY after a network crash
+        chunkSize: 5 * 1024 * 1024,
+        removeFingerprintOnSuccess: true,
+        // Deterministic ID logic
         fingerprint: (file) => {
           return ['tus', file.name, file.size, userRef.current].join('-');
-        },
-        removeFingerprintOnSuccess: true
+        }
       });
   }, []);
 
   const fetchFiles = async () => {
-    if (!username) { setServerFiles([]); return; }
+    if (!username) return;
     try {
       const response = await fetch(`/list-files?user=${username}`);
       const data = await response.json();
       setServerFiles(data);
-    } catch (e) { console.error("Fetch failed"); }
+    } catch (e) { }
   };
 
   useEffect(() => {
     fetchFiles();
-    const pluginId = 'encryptor';
-    if (!uppy.getPlugin(pluginId)) {
-      uppy.addPreProcessor(async (fileIDs) => {
-        const user = userRef.current;
-        const pass = passRef.current;
-        if (!user || !pass) {
-          alert("Enter Credentials!");
-          throw new Error("Missing Credentials");
-        }
-        for (const fileID of fileIDs) {
-          const file = uppy.getFile(fileID);
-          if (file.name.endsWith('.enc') || file.meta.isEncrypted) continue;
-
-          const base64Data = await new Promise(r => {
-            const rd = new FileReader();
-            rd.onload = () => r(rd.result);
-            rd.readAsDataURL(file.data);
-          });
-          const encrypted = CryptoJS.AES.encrypt(base64Data, pass).toString();
-
-          uppy.setFileState(fileID, {
-            data: new Blob([encrypted], { type: 'text/plain' }),
-            name: file.name + '.enc',
-            meta: { ...file.meta, filename: file.name + '.enc', userId: user, isEncrypted: true }
-          });
-        }
-      });
-    }
-
     if (dashboardRef.current && !uppy.getPlugin('Dashboard')) {
       uppy.use(Dashboard, { target: dashboardRef.current, inline: true, width: '100%', height: 350 });
     }
 
-    const handleOnline = () => { setIsOnline(true); uppy.retryAll(); };
+    uppy.addPreProcessor(async (fileIDs) => {
+      const u = userRef.current;
+      const p = passRef.current;
+      if (!u || !p) { alert("Credentials Required!"); throw new Error("Auth"); }
+
+      for (const fileID of fileIDs) {
+        const file = uppy.getFile(fileID);
+        if (file.name.endsWith('.enc') || file.meta.isEncrypted) continue;
+
+        const base64Data = await new Promise(r => {
+          const rd = new FileReader();
+          rd.onload = () => r(rd.result);
+          rd.readAsDataURL(file.data);
+        });
+        const encrypted = CryptoJS.AES.encrypt(base64Data, p).toString();
+
+        uppy.setFileState(fileID, {
+          data: new Blob([encrypted], { type: 'text/plain' }),
+          name: file.name + '.enc',
+          meta: { ...file.meta, filename: file.name + '.enc', userId: u, isEncrypted: true }
+        });
+      }
+    });
+
+    // --- FIX: SMART NETWORK LISTENER ---
+    const handleOnline = () => {
+      setIsOnline(true);
+      console.log("Network back. Waiting 2s for stability...");
+      // Wait 2 seconds before forcing retry
+      setTimeout(() => {
+        console.log("Resuming uploads now.");
+        uppy.retryAll();
+      }, 2000);
+    };
     const handleOffline = () => setIsOnline(false);
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    uppy.on('complete', () => { setTimeout(() => { fetchFiles(); uppy.cancelAll(); }, 1000); });
+
+    uppy.on('complete', () => { setTimeout(fetchFiles, 1000); });
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
@@ -96,29 +101,26 @@ function App() {
   }, [uppy]);
 
   const downloadAndDecrypt = async (fileId, originalName) => {
-    if (!passphrase) { alert("Enter Key!"); return; }
+    if (!passphrase) { alert("Key Required!"); return; }
     try {
       const response = await fetch('/download/' + fileId);
       const encryptedText = await response.text();
       const bytes = CryptoJS.AES.decrypt(encryptedText, passphrase);
       const decryptedBase64 = bytes.toString(CryptoJS.enc.Utf8);
-      if (!decryptedBase64) throw new Error();
       const res = await fetch(decryptedBase64);
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // Fix name cleaning
-      const cleanName = originalName.replace(/(\.enc)+$/, '');
-      a.download = cleanName;
+      a.download = originalName.replace('.enc', '');
       document.body.appendChild(a); a.click();
-    } catch (e) { alert("Decryption Failed!"); }
+    } catch (e) { alert("Decryption Error"); }
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '80px', backgroundColor: '#f0f2f5', minHeight: '100vh', fontFamily: 'sans-serif' }}>
       <div style={{ padding: '10px', textAlign: 'center', fontWeight: 'bold', color: 'white', width: '100%', position: 'fixed', top: 0, left: 0, backgroundColor: isOnline ? '#34a853' : '#ea4335' }}>
-        {isOnline ? "✅ SYSTEM ONLINE" : "⚠️ NO CONNECTION"}
+        {isOnline ? "✅ SYSTEM ONLINE" : "⚠️ OFFLINE: UPLOADS PAUSED"}
       </div>
       <h1 style={{ color: '#1a73e8' }}>Tigray Secure Vault</h1>
       <div style={{ backgroundColor: '#fff', padding: '20px', borderRadius: '10px', marginBottom: '20px', textAlign: 'center', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
