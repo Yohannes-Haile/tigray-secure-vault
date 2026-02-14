@@ -10,6 +10,11 @@ const app = express();
 // Detect port: Use 80 on AWS, 3000 on Local
 const port = process.env.PORT || 3000;
 
+// When running behind a load balancer or reverse proxy (ALB/NGINX),
+// trust the X-Forwarded-* headers so the server generates correct absolute URLs
+// (this is important so TUS returns a Location the client can reach)
+app.set('trust proxy', true);
+
 // Ensure local files folder exists (used when not running S3)
 const directoryPath = path.join(__dirname, 'files');
 if (!fs.existsSync(directoryPath)) { fs.mkdirSync(directoryPath, { recursive: true }); }
@@ -121,7 +126,7 @@ app.get('/download/:fileId', async (req, res) => {
 
 app.all(/^\/uploads/, (req, res) => {
     try {
-        console.log(`[TUS] ${req.method} ${req.originalUrl} offset=${req.headers['upload-offset'] || '-'} user-agent=${req.headers['user-agent'] || '-'} `);
+        console.log(`[TUS] ${req.method} ${req.originalUrl} offset=${req.headers['upload-offset'] || '-'} x-forwarded-host=${req.headers['x-forwarded-host'] || '-'} x-forwarded-proto=${req.headers['x-forwarded-proto'] || '-'} user-agent=${req.headers['user-agent'] || '-'} `);
     } catch (e) { }
     tusServer.handle(req, res);
 });
