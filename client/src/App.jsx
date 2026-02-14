@@ -11,26 +11,32 @@ function App() {
   const [serverFiles, setServerFiles] = useState([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // Refs prevent stale data in Uppy
   const userRef = useRef('');
   const passRef = useRef('');
   useEffect(() => { userRef.current = username; }, [username]);
   useEffect(() => { passRef.current = passphrase; }, [passphrase]);
 
   const uppy = useMemo(() => {
-    return new Uppy({ id: 'tigray-vault', debug: true, autoProceed: false })
+    return new Uppy({
+      id: 'tigray-vault',
+      debug: true,
+      autoProceed: false,
+      // CRITICAL: If the network drops, we only lose 5MB max
+      onBeforeFileAdded: (currentFile) => {
+        if (currentFile.name.endsWith('.enc')) return true;
+        return true;
+      }
+    })
       .use(Tus, {
         endpoint: '/uploads',
-        resume: true,
-        autoRetry: true,
-        retryDelays: [0, 1000, 3000, 5000, 10000, 20000], // Long retries for poor connections
-        removeFingerprintOnSuccess: true,
-        // Keep the fingerprint tied to the current user so resume works across brief disconnects
-        fingerprint: (file) => ['tus', userRef.current, file.name, file.size].join('-'),
-        // Ensure Tus header is present
-        onBeforeRequest: (req) => { req.setHeader('Tus-Resumable', '1.0.0'); },
-        limit: 1,
-        chunkSize: 512 * 1024 // 512KB for stability
+        retryDelays: [0, 1000, 3000, 5000, 10000],
+        chunkSize: 5 * 1024 * 1024, // 5MB chunks
+        // THE FIX: Deterministic Fingerprint
+        // This ensures the ID matches EXACTLY after a network crash
+        fingerprint: (file) => {
+          return ['tus', file.name, file.size, userRef.current].join('-');
+        },
+        removeFingerprintOnSuccess: true
       });
   }, []);
 
@@ -40,24 +46,22 @@ function App() {
       const response = await fetch(`/list-files?user=${username}`);
       const data = await response.json();
       setServerFiles(data);
-    } catch (e) { console.error("Sync error"); }
+    } catch (e) { console.error("Fetch failed"); }
   };
 
   useEffect(() => {
     fetchFiles();
-
-    // GUARD: Only add the encryptor once
-    if (!uppy.getPlugin('TigrayEncryptor')) {
+    const pluginId = 'encryptor';
+    if (!uppy.getPlugin(pluginId)) {
       uppy.addPreProcessor(async (fileIDs) => {
         const user = userRef.current;
         const pass = passRef.current;
         if (!user || !pass) {
-          alert("Please enter Username and Key.");
-          throw new Error("Missing credentials");
+          alert("Enter Credentials!");
+          throw new Error("Missing Credentials");
         }
-        for (const id of fileIDs) {
-          const file = uppy.getFile(id);
-          // PREVENT DOUBLE ENCRYPTION
+        for (const fileID of fileIDs) {
+          const file = uppy.getFile(fileID);
           if (file.name.endsWith('.enc') || file.meta.isEncrypted) continue;
 
           const base64Data = await new Promise(r => {
@@ -65,9 +69,9 @@ function App() {
             rd.onload = () => r(rd.result);
             rd.readAsDataURL(file.data);
           });
-
           const encrypted = CryptoJS.AES.encrypt(base64Data, pass).toString();
-          uppy.setFileState(id, {
+
+          uppy.setFileState(fileID, {
             data: new Blob([encrypted], { type: 'text/plain' }),
             name: file.name + '.enc',
             meta: { ...file.meta, filename: file.name + '.enc', userId: user, isEncrypted: true }
@@ -85,12 +89,11 @@ function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     uppy.on('complete', () => { setTimeout(() => { fetchFiles(); uppy.cancelAll(); }, 1000); });
-
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [uppy, username]);
+  }, [uppy]);
 
   const downloadAndDecrypt = async (fileId, originalName) => {
     if (!passphrase) { alert("Enter Key!"); return; }
@@ -99,12 +102,15 @@ function App() {
       const encryptedText = await response.text();
       const bytes = CryptoJS.AES.decrypt(encryptedText, passphrase);
       const decryptedBase64 = bytes.toString(CryptoJS.enc.Utf8);
+      if (!decryptedBase64) throw new Error();
       const res = await fetch(decryptedBase64);
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = originalName.replace('.enc', '');
+      // Fix name cleaning
+      const cleanName = originalName.replace(/(\.enc)+$/, '');
+      a.download = cleanName;
       document.body.appendChild(a); a.click();
     } catch (e) { alert("Decryption Failed!"); }
   };
@@ -112,7 +118,7 @@ function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: '80px', backgroundColor: '#f0f2f5', minHeight: '100vh', fontFamily: 'sans-serif' }}>
       <div style={{ padding: '10px', textAlign: 'center', fontWeight: 'bold', color: 'white', width: '100%', position: 'fixed', top: 0, left: 0, backgroundColor: isOnline ? '#34a853' : '#ea4335' }}>
-        {isOnline ? "✅ SYSTEM ONLINE" : "⚠️ OFFLINE: WAITING TO RESUME..."}
+        {isOnline ? "✅ SYSTEM ONLINE" : "⚠️ NO CONNECTION"}
       </div>
       <h1 style={{ color: '#1a73e8' }}>Tigray Secure Vault</h1>
       <div style={{ backgroundColor: '#fff', padding: '20px', borderRadius: '10px', marginBottom: '20px', textAlign: 'center', boxShadow: '0 2px 5px rgba(0,0,0,0.1)' }}>
