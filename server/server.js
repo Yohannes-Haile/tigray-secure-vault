@@ -10,6 +10,7 @@ const app = express();
 // Detect port: Use 80 on AWS, 3000 on Local
 const port = process.env.PORT || 3000;
 
+// Ensure local files folder exists (used when not running S3)
 const directoryPath = path.join(__dirname, 'files');
 if (!fs.existsSync(directoryPath)) { fs.mkdirSync(directoryPath, { recursive: true }); }
 
@@ -17,11 +18,12 @@ if (!fs.existsSync(directoryPath)) { fs.mkdirSync(directoryPath, { recursive: tr
 // otherwise fall back to local FileStore for simple local runs.
 const useS3 = Boolean(process.env.S3_BUCKET && process.env.AWS_REGION);
 let datastore;
+let s3Client; // populated only if S3 enabled
 if (useS3) {
     try {
         const { S3Store } = require('@tus/s3-store');
         const { S3Client } = require('@aws-sdk/client-s3');
-        const s3Client = new S3Client({ region: process.env.AWS_REGION });
+        s3Client = new S3Client({ region: process.env.AWS_REGION });
         datastore = new S3Store({ bucket: process.env.S3_BUCKET, s3Client: s3Client });
         console.log('Using S3Store for tus datastore (bucket=%s)', process.env.S3_BUCKET);
     } catch (e) {
@@ -38,6 +40,7 @@ const tusServer = new Server({
 });
 
 app.use(compression());
+// Expose TUS-specific headers so the browser/Tus client can read them after CORS
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PATCH', 'HEAD', 'OPTIONS', 'DELETE'],
@@ -94,8 +97,24 @@ app.get('/list-files', (req, res) => {
     });
 });
 
-app.get('/download/:fileId', (req, res) => {
-    const filePath = path.join(directoryPath, req.params.fileId);
+// DOWNLOAD endpoint: local-file download works as before; for S3 we return a temporary presigned URL if possible
+app.get('/download/:fileId', async (req, res) => {
+    const fileId = req.params.fileId;
+    if (useS3 && s3Client) {
+        try {
+            // Create a presigned URL for downloading the object from S3
+            const { GetObjectCommand } = require('@aws-sdk/client-s3');
+            const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+            const cmd = new GetObjectCommand({ Bucket: process.env.S3_BUCKET, Key: fileId });
+            const url = await getSignedUrl(s3Client, cmd, { expiresIn: 3600 });
+            return res.json({ url });
+        } catch (e) {
+            console.error('Failed to create presigned URL for', fileId, e && e.message);
+            return res.status(500).send('Download error');
+        }
+    }
+
+    const filePath = path.join(directoryPath, fileId);
     if (fs.existsSync(filePath)) { res.download(filePath); }
     else { res.status(404).send('Not found'); }
 });
