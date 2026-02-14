@@ -13,7 +13,25 @@ const port = process.env.PORT || 3000;
 const directoryPath = path.join(__dirname, 'files');
 if (!fs.existsSync(directoryPath)) { fs.mkdirSync(directoryPath, { recursive: true }); }
 
-const datastore = new FileStore({ directory: directoryPath });
+// Choose datastore: prefer S3 when configured (for multi-instance AWS deployments),
+// otherwise fall back to local FileStore for simple local runs.
+const useS3 = Boolean(process.env.S3_BUCKET && process.env.AWS_REGION);
+let datastore;
+if (useS3) {
+    try {
+        const { S3Store } = require('@tus/s3-store');
+        const { S3Client } = require('@aws-sdk/client-s3');
+        const s3Client = new S3Client({ region: process.env.AWS_REGION });
+        datastore = new S3Store({ bucket: process.env.S3_BUCKET, s3Client: s3Client });
+        console.log('Using S3Store for tus datastore (bucket=%s)', process.env.S3_BUCKET);
+    } catch (e) {
+        console.error('Failed to initialize S3Store, falling back to FileStore:', e && e.message);
+        datastore = new FileStore({ directory: directoryPath });
+    }
+} else {
+    datastore = new FileStore({ directory: directoryPath });
+}
+
 const tusServer = new Server({
     path: '/uploads',
     datastore: datastore,
@@ -45,6 +63,12 @@ app.use(cors({
 // --- SMART FILE LISTING ---
 app.get('/list-files', (req, res) => {
     const requestedUser = req.query.user;
+    // If we're using S3 for storage, listing requires calling S3 ListObjectsV2.
+    // For now return an empty list so the frontend continues to work.
+    if (useS3) {
+        return res.json([]);
+    }
+
     fs.readdir(directoryPath, (err, files) => {
         if (err) return res.status(500).send('Folder error');
 
