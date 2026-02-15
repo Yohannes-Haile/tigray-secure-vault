@@ -25,6 +25,9 @@ const tusServer = new Server({
 
 app.use(compression());
 
+// Trust proxy headers (X-Forwarded-*) when behind an ALB / reverse proxy
+app.set('trust proxy', true);
+
 // CRITICAL: Allow Resume Headers
 app.use(cors({
     origin: '*',
@@ -65,6 +68,27 @@ app.get('/download/:fileId', (req, res) => {
 });
 
 app.all(/^\/uploads/, (req, res) => {
+    // Intercept Location header set by tus server and prefer X-Forwarded headers
+    const origSetHeader = res.setHeader.bind(res);
+    res.setHeader = (name, value) => {
+        try {
+            if (name && name.toLowerCase() === 'location' && typeof value === 'string') {
+                // If the tus server returned an absolute URL using localhost, rewrite it
+                // to the public host/proto observed on the incoming request (trust proxy must be enabled).
+                const parsed = new URL(value, `${req.protocol}://${req.get('host')}`);
+                const host = req.get('x-forwarded-host') || req.get('host');
+                const proto = req.get('x-forwarded-proto') || req.protocol || 'http';
+                if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
+                    const newUrl = `${proto}://${host}${parsed.pathname}`;
+                    return origSetHeader(name, newUrl);
+                }
+            }
+        } catch (e) {
+            // fallthrough to default behaviour
+        }
+        return origSetHeader(name, value);
+    };
+
     tusServer.handle(req, res);
 });
 
